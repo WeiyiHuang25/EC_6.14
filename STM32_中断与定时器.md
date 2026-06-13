@@ -699,7 +699,6 @@ bsp_uart.h
 
 #define UART_RX_MAX_LEN 8u
 
-void UART_Init(void);
 void UART_SendByte(uint8_t data);
 void UART_SendData(uint8_t *data, uint16_t len);
 void UART_SendString(char *str);
@@ -716,10 +715,6 @@ bsp_uart.c
 
 static uint8_t uart_rx_data[UART_RX_MAX_LEN];
 
-void UART_Init(void)
-{
-    HAL_UARTEx_ReceiveToIdle_IT(&huart1, uart_rx_data, UART_RX_MAX_LEN);
-}
 
 void UART_SendByte(uint8_t data)
 {
