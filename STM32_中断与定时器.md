@@ -1,7 +1,13 @@
 # STM32 中断与定时器
 
+## 本节内容
+- 中断原理与应用
+- TIM定时器的原理与应用
+- 使用PWM、UART与中断完成实验项目
 
-
+**核心要求**：
+- 学会借助手册完成项目
+- 理解中断、定时器与PWM
 
 ## 一、中断基础概念
 
@@ -747,4 +753,64 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 }
 
 ```
-#### 
+#### 5.2.5 编写业务函数
+
+app_task.h
+```c
+#pragma once
+#include "main.h"
+#include "tim.h"
+void app_task();
+void app_startMotor();
+void User_init();
+```
+
+app_task.c
+```c
+#include "app_task.h"
+#include "bsp_encoder.h"
+#include "bsp_pwm.h"
+#include "bsp_uart.h"
+#include "drv_tb6612.h"
+#include <string.h>
+
+uint32_t flag100hz = 0;
+
+void app_task()
+{
+    if(flag100hz)
+    {
+        float rpm;
+        rpm = Encoder_GetRPM();
+        uint8_t buf[4] = {0};
+        memcpy(buf, &rpm, sizeof(rpm));
+        UART_SendData(buf, sizeof(buf));
+        flag100hz = 0;
+    }
+}
+
+void app_setFlag()
+{
+    flag100hz = 1;
+}
+
+void app_startMotor()
+{
+    TB6612_SetRPM(100.0f);
+}
+
+void User_init()
+{
+    Encoder_Init();
+}
+
+
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if(htim == &htim6)
+    {
+        app_setFlag();
+    }
+};
+
+```
