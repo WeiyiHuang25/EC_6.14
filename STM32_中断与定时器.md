@@ -8,7 +8,7 @@
 **核心要求**：
 - 学会借助手册完成项目
 - 理解中断、定时器与PWM
-
+> [开发板的资料](https://cuhko365-my.sharepoint.com/:f:/g/personal/124090375_link_cuhk_edu_cn/IgBybNU7Ww16RqmJ56El-ddbAbNu0SF-npIOJAGpVP-oRYg?e=XdecX2)
 ## 一、中断基础概念
 
 ### 1.1 什么是中断？
