@@ -440,8 +440,9 @@ void setPwmDuty(uint32_t duty)
 
 #### 5.2.2 编写Encoder驱动
 
-bsp_encoder.h
+encoder的原理很简单，硬件会在正转时对CNT++，反转时对CNT--，我们只需要CNT/TIME即可
 
+bsp_encoder.h
 ```c
 #pragma once
 

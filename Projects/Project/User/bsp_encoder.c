@@ -6,6 +6,14 @@ static uint32_t encoder_last_tick = 0;
 
 #define ENCODER_COUNTS_PER_MOTOR_REV  (ENCODER_PULSE_PER_MOTOR_REV * ENCODER_QUADRATURE_MULTIPLE)
 
+void Encoder_Init(void);
+void Encoder_Reset(void);
+int32_t Encoder_GetCount(void);
+void Encoder_Reset(void);
+float Encoder_GetMotorRPM(void);
+float Encoder_GetRPM(void);
+
+
 void Encoder_Init(void)
 {
     HAL_TIM_Encoder_Start(&htim1, TIM_CHANNEL_ALL);
@@ -40,11 +48,11 @@ float Encoder_GetMotorRPM(void)
     encoder_last_count = now_count;
     encoder_last_tick = now_tick;
 
-    return ((float)delta_count * 60000.0f) / ((float)ENCODER_COUNTS_PER_MOTOR_REV * (float)dt_ms);
+    return ((float)delta_count * (float)ENCODER_DIRECTION * 60000.0f) /
+           ((float)ENCODER_COUNTS_PER_MOTOR_REV * (float)dt_ms);
 }
 
 float Encoder_GetRPM(void)
 {
     return Encoder_GetMotorRPM() / ENCODER_GEAR_RATIO;
 }
-
