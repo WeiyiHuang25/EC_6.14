@@ -293,6 +293,9 @@ STM32的不同定时器的性能不同，能实现的功能也不同
 
 ### 4.2 预分频器（Prescaler）与自动重装载
 
+在默认状态下，定时器的时钟源是内部总线时钟，为了达到我们想要的时间，所以我们要进行分频处理。具体细节见 `RM0090` Section `7.2` `17.2`
+
+分频完成后，定时器会捕获分频器输出的脉冲，然后根据计数器模式进行计数，当计数器达到重装载值(ARR, Auto Reload Register)后可以根据用户的设置进行重置，用户可以选择是否在重装载值到达时触发中断
 
 
 ### 4.3 捕获/比较通道
@@ -309,302 +312,44 @@ STM32的不同定时器的性能不同，能实现的功能也不同
 - 匹配时翻转输出引脚电平或触发中断
 - 用于生成精确 timing 信号
 
-#### PWM 生成（PWM Mode）
+#### PWM 生成（PWM Mode）***重点**
+
+PWM是控制高低电平输出时间的信号，可以借助PWM控制LED的亮度，电机的速度等
+
 - 是输出比较模式的特例，输出固定频率的脉宽调制信号
 - 可配置 PWM1 和 PWM2 两种模式
 
-### 4.4 更新事件与中断
 
-每当计数器上溢/下溢（或通过软件）时，会产生一个**更新事件（Update Event）**，可触发：
-- 更新中断（Update Interrupt）— 最常用
-- 更新 DMA 请求
-- 触发其他外设（如 DAC）
+PWM信号的产生本质上也是定时器的比较
+|条件|PWM1|PWM2|
+|---|---|---|
+|CNT<CCRx|1|0|
+|CNT>=CCRx|0|1|
 
-> **注意**：修改 PSC、ARR 或通过软件触发更新时，新值可能不会立即生效（取决于自动重装载预装载使能状态）。
+![TIM1](./pictures/TIM1.png)
+
+由于STM32F407的一个定时器有多个定时器通道，也就是有多个CCR，因此通过更改不同通道的CCR值可以实现一个定时器输出不同的PWM信号，节省定时器资源
+
+### 4.4 编码器接口
+
+MG370电机采用的是A/B相正交编码器
+
+![TIM2](./pictures/TIM2.png)
+
+在STM32中，部分定时器可以直接硬件解码这种信号，这就是编码器接口(Encoder Interface)
+
+在此我们不讨论具体硬件原理，只需要学会使用即可
 
 ---
 
 ## 五、中断与定时器的结合应用
 
-### 5.1 定时器溢出中断（TIMx_UP）
+在这个项目中，我们将实现
+- 用TIM生成一个100Hz中断
+- 用PWM驱动电机
+- 用Encoder Interface实现读取电机转速
+- 通过在100Hz的中断里更改PWM占空比，实现匀加速和匀减速
+- 通过UART通信将转速输出到电脑上
+
+### 5.1 配置CubeMX
 
-最基本的用法——定时器计数器溢出时触发中断，用于精确计时任务。
-
-**配置步骤**：
-1. 使能 TIMx 时钟（如 `RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE)`）
-2. 配置时基单元（PSC、ARR、计数模式）
-3. 使能更新中断（`TIM_ITConfig(TIM2, TIM_IT_Update, ENABLE)`）
-4. 配置 NVIC 使能对应中断通道
-5. 启动定时器（`TIM_Cmd(TIM2, ENABLE)`）
-6. 在 `TIM2_IRQHandler()` 中处理定时任务
-
-**典型代码**：
-```c
-void TIM2_Init(void) {
-    TIM_TimeBaseInitTypeDef TIM_InitStructure;
-    NVIC_InitTypeDef NVIC_InitStructure;
-
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);
-
-    TIM_InitStructure.TIM_Prescaler = 7200 - 1;    // 72MHz / 7200 = 10kHz
-    TIM_InitStructure.TIM_Period = 10000 - 1;       // 10kHz / 10000 = 1Hz（1秒）
-    TIM_InitStructure.TIM_CounterMode = TIM_CounterMode_Up;
-    TIM_TimeBaseInit(TIM2, &TIM_InitStructure);
-
-    TIM_ITConfig(TIM2, TIM_IT_Update, ENABLE);
-
-    NVIC_InitStructure.NVIC_IRQChannel = TIM2_IRQn;
-    NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
-    NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
-    NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-    NVIC_Init(&NVIC_InitStructure);
-
-    TIM_Cmd(TIM2, ENABLE);
-}
-
-void TIM2_IRQHandler(void) {
-    if (TIM_GetITStatus(TIM2, TIM_IT_Update) == SET) {
-        // 定时任务：翻转 LED、执行传感器采集等
-        LED = !LED;
-        TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
-    }
-}
-```
-
-### 5.2 PWM 输出与比较中断
-
-定时器可输出 PWM 波形，通过调节 CCRx 值改变占空比，常用于电机调速、灯光调光、呼吸灯等场景。
-
-**PWM 占空比控制逻辑**：
-
-| 模式 | CNT < CCRx | CNT ≥ CCRx |
-|------|-----------|------------|
-| PWM1 | 输出高电平 | 输出低电平 |
-| PWM2 | 输出低电平 | 输出高电平 |
-
-**呼吸灯示例**：
-```c
-void PWM_Init(uint16_t arr, uint16_t psc) {
-    GPIO_InitTypeDef GPIO_InitStructure;
-    TIM_TimeBaseInitTypeDef TIM_InitStructure;
-    TIM_OCInitTypeDef TIM_OCInitStructure;
-
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
-
-    // GPIO 复用推挽输出
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;         // TIM3_CH1 → PA6
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF_PP;
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
-
-    // 时基单元
-    TIM_InitStructure.TIM_Period = arr;
-    TIM_InitStructure.TIM_Prescaler = psc;
-    TIM_InitStructure.TIM_CounterMode = TIM_CounterMode_Up;
-    TIM_TimeBaseInit(TIM3, &TIM_InitStructure);
-
-    // PWM 通道
-    TIM_OCInitStructure.TIM_OCMode = TIM_OCMode_PWM1;
-    TIM_OCInitStructure.TIM_OutputState = TIM_OutputState_Enable;
-    TIM_OCInitStructure.TIM_Pulse = 0;                // 初始占空比 0
-    TIM_OCInitStructure.TIM_OCPolarity = TIM_OCPolarity_Low;
-    TIM_OC1Init(TIM3, &TIM_OCInitStructure);
-
-    TIM_OC1PreloadConfig(TIM3, TIM_OCPreload_Enable);
-    TIM_ARRPreloadConfig(TIM3, ENABLE);
-    TIM_Cmd(TIM3, ENABLE);
-}
-
-// 主循环中改变占空比实现呼吸灯
-uint16_t ccr = 0;
-uint8_t dir = 0;
-while (1) {
-    dir ? (ccr--) : (ccr++);
-    if (ccr >= 500) dir = 1;
-    if (ccr <= 0)   dir = 0;
-    TIM_SetCompare1(TIM3, ccr);
-    delay_ms(5);
-}
-```
-
-### 5.3 输入捕获测量脉冲宽度
-
-输入捕获用于测量外部信号的脉冲宽度或频率。原理：在边沿跳变时将计数器 CNT 的值锁存到 CCRx，通过两次捕获的差值计算时间。
-
-**测量方法**（以测量高电平脉宽为例）：
-1. 配置通道为**上升沿捕获** → t1 时刻锁存 CNT 到 CCRx，立即切换为下降沿捕获
-2. 下降沿到来时 → t2 时刻再次锁存
-3. 脉宽 = (CCR2 - CCR1) × 定时器周期
-
-**配置步骤**：
-```c
-// 以 TIM5_CH1（PA0）测量脉冲宽度为例
-RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM5, ENABLE);
-RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
-
-// GPIO 配置为下拉输入
-GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
-GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPD;
-GPIO_Init(GPIOA, &GPIO_InitStructure);
-
-// 时基单元配置
-TIM_TimeBaseInitStructure.TIM_Prescaler = 7200 - 1;   // 10kHz 计数频率
-TIM_TimeBaseInitStructure.TIM_Period = 0xFFFF;        // 最大计数量程
-TIM_TimeBaseInitStructure.TIM_CounterMode = TIM_CounterMode_Up;
-TIM_TimeBaseInit(TIM5, &TIM_TimeBaseInitStructure);
-
-// 输入捕获配置
-TIM_ICInitStructure.TIM_Channel = TIM_Channel_1;
-TIM_ICInitStructure.TIM_ICPolarity = TIM_ICPolarity_Rising;  // 先捕获上升沿
-TIM_ICInitStructure.TIM_ICSelection = TIM_ICSelection_DirectTI;
-TIM_ICInitStructure.TIM_ICPrescaler = TIM_ICPSC_DIV1;
-TIM_ICInitStructure.TIM_ICFilter = 0x0;
-TIM_ICInit(TIM5, &TIM_ICInitStructure);
-
-TIM_Cmd(TIM5, ENABLE);
-```
-
-### 5.4 定时器触发 ADC/DMA 联动
-
-定时器更新事件可触发 ADC 开始转换，转换完成后 DMA 自动将数据搬移到内存，全程无需 CPU 干预，适用于高速数据采集（如音频采样、传感器数据记录）。
-
-典型配置流程：
-1. 配置定时器（TIMx）产生周期性更新事件
-2. 配置 ADC 触发源为该定时器
-3. 配置 DMA 通道，将 ADC 数据从 DR 寄存器传输到内存数组
-4. 启动定时器 → 自动触发 ADC → DMA 自动传输 → 循环覆盖
-
----
-
-## 六、实战练习建议
-
-### 实验一：定时器控制 LED 闪烁
-
-**目标**：使用 TIM3 产生 1Hz 更新中断，控制 LED 每秒翻转一次。
-
-**要点**：
-- 配置 PSC = 7200-1，ARR = 10000-1（1s 定时）
-- 在 ISR 中翻转 GPIO 引脚电平
-- 观察 LED 闪烁频率是否符合预期
-
----
-
-### 实验二：外部中断按键响应
-
-**目标**：使用 EXTI 捕获按键按下事件，触发 LED 状态切换。
-
-**要点**：
-- 按键 GPIO 配置为上拉输入模式
-- 通过 AFIO 配置 GPIO 与 EXTI 线路的映射关系
-- 配置 EXTI 下降沿触发（按键按下时为低电平）
-- NVIC 配置优先级，在 ISR 中清除 EXTI_PR 标志位
-
-**配置步骤总结**：
-```c
-// 1. 使能时钟
-RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOE | RCC_APB2Periph_AFIO, ENABLE);
-
-// 2. GPIO 配置
-GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4;
-GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
-GPIO_Init(GPIOE, &GPIO_InitStructure);
-
-// 3. AFIO 映射
-GPIO_EXTILineConfig(GPIO_PortSourceGPIOE, GPIO_PinSource4);
-
-// 4. EXTI 配置
-EXTI_InitStructure.EXTI_Line = EXTI_Line4;
-EXTI_InitStructure.EXTI_Mode = EXTI_Mode_Interrupt;
-EXTI_InitStructure.EXTI_Trigger = EXTI_Trigger_Falling;
-EXTI_InitStructure.EXTI_LineCmd = ENABLE;
-EXTI_Init(&EXTI_InitStructure);
-
-// 5. NVIC 配置
-NVIC_InitStructure.NVIC_IRQChannel = EXTI4_IRQn;
-NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 2;
-NVIC_InitStructure.NVIC_IRQChannelSubPriority = 1;
-NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
-NVIC_Init(&NVIC_InitStructure);
-
-// 6. ISR
-void EXTI4_IRQHandler(void) {
-    if (EXTI_GetITStatus(EXTI_Line4) == SET) {
-        LED = !LED;                           // 切换 LED 状态
-        EXTI_ClearITPendingBit(EXTI_Line4);   // 清除中断标志
-    }
-}
-```
-
----
-
-### 实验三：PWM 输出控制呼吸灯
-
-**目标**：使用 TIM3_CH1 输出 PWM，调节占空比实现 LED 呼吸灯效果。
-
-**要点**：
-- GPIO 配置为复用推挽输出
-- PWM 模式选择 PWM1
-- 在主循环中渐进增减 CCR 值，观察 LED 亮度平滑变化
-
----
-
-### 实验四：输入捕获测量信号频率
-
-**目标**：使用 TIM5_CH1 捕获外部方波信号频率，计算并通过串口打印。
-
-**要点**：
-- 配置定时器为输入捕获模式，上升沿触发
-- 在捕获中断中记录两次上升沿的 CCR 值差
-- 根据定时器时钟频率计算信号周期和频率
-- 通过 USART 上传测量结果
-
----
-
-## 七、常用寄存器速查
-
-### NVIC 相关
-
-| 寄存器 | 作用 |
-|--------|------|
-| NVIC->ISER[0/1] | 中断使能 |
-| NVIC->ICER[0/1] | 中断清除（关闭） |
-| NVIC->IPR[0~7] | 中断优先级（8 位/中断，4 位有效） |
-
-### EXTI 相关
-
-| 寄存器 | 作用 |
-|--------|------|
-| EXTI->IMR | 中断屏蔽 |
-| EXTI->EMR | 事件屏蔽 |
-| EXTI->RTSR | 上升沿触发 |
-| EXTI->FTSR | 下降沿触发 |
-| EXTI->PR | 挂起标志（写 1 清除） |
-
-### 定时器相关
-
-| 寄存器 | 作用 |
-|--------|------|
-| TIMx->PSC | 预分频值 |
-| TIMx->ARR | 自动重装载值 |
-| TIMx->CNT | 当前计数值 |
-| TIMx->CCR1~4 | 捕获/比较寄存器 |
-| TIMx->DIER | DMA/中断使能寄存器 |
-| TIMx->SR | 状态寄存器 |
-| TIMx->EGR | 事件生成寄存器 |
-
----
-
-## 八、学习建议
-
-1. **先理解概念，再动手实践**：中断和定时器的配置步骤较多，建议先从简单的定时器溢出中断入手，理解时基单元和 NVIC 的配合关系。
-
-2. **善用调试工具**：在 ISR 中设置断点，观察中断何时触发、计数器如何变化。
-
-3. **从现象到原理**：遇到不预期的结果（如定时不准、中断不触发）时，先检查时钟配置、NVIC 优先级分组、中断标志清除等常见问题。
-
-4. **逐步扩展功能**：在基本定时中断基础上，逐步加入 PWM 输出、输入捕获，最终实现定时器→ADC→DMA 的联动，形成完整的技术栈。
-
----
-
-*本文档基于 STM32F1 系列（标准库）编写，适用于正点原子、野火、铁头等主流开发板。如使用 HAL 库或 F4/F7 系列，API 略有不同，但核心原理相通。*
