@@ -93,6 +93,7 @@ int main(void)
   MX_TIM8_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start_IT(&htim6);
   User_init();
   app_startMotor();
   /* USER CODE END 2 */
