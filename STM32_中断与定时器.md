@@ -346,11 +346,21 @@ MG370电机采用的是A/B相正交编码器
 
 在这个项目中，我们将实现
 - 用PWM驱动电机
-- 用Encoder Interface实现读取电机转速
-- 通过UART通信将转速输出到电脑上，并实现UART控制PWM
+- 用Encoder Interface和TIM定时器中断实现读取电机转速
+- 通过UART通信将转速输出到电脑上
 > UART通信我们还没有讲解，在此只是应用，我们将在后面的课程中学习，有兴趣的同学可以观看 [中科大RM电控教学](https://www.bilibili.com/video/BV1db4y1a7Xe/?share_source=copy_web&vd_source=de770ffc23fc2651b6ae5b4b0694e6a0)
 
 ### 5.1 配置CubeMX
+
+#### 5.1.1 配置定时器中断
+- 启用TIM6
+- 根据手册判断主频
+- 将中断配置为100Hz
+- 启用中断
+
+![Proj1](./pictures/Proj1.png)
+![Proj2](./pictures/Proj2.png)
+
 
 #### 5.1.1 配置PWM输出
 - 找到TIM8
@@ -382,6 +392,13 @@ MG370电机采用的是A/B相正交编码器
 ![Proj8](./pictures/Proj8.png)
 
 ![Proj9](./pictures/Proj9.png)
+#### 5.1.4 配置GPIO输出
+电机的驱动芯片采用TB6612，其真值图如下
+
+![Proj10](./pictures/Proj10.png)
+
+因此我们需要两个GPIO来控制
+在此我们按照上一节课的方法，配置好 `PF0` `PF1`
 
 ### 5.2 编写程序
 #### 5.2.1 编写PWM驱动
@@ -521,4 +538,218 @@ float Encoder_GetRPM(void)
 }
 
 ```
+#### 5.2.3 编写TB6612驱动
 
+根据真值图，我们编写正反转的驱动
+
+drv_tb6612.h
+```c
+#pragma once
+
+#include "main.h"
+
+#define TB6612_PWM_MAX_DUTY 4999u
+#define TB6612_MAX_RPM      282.0f
+#define TB6612_RPM_DIR      1.0f
+
+typedef enum
+{
+    TB6612_DIR_STOP = 0,
+    TB6612_DIR_FORWARD,
+    TB6612_DIR_REVERSE,
+    TB6612_DIR_BRAKE
+} TB6612_Dir_t;
+
+void TB6612_SetRPM(float rpm);
+```
+drv_tb6612.c
+```c
+#include "drv_tb6612.h"
+#include "bsp_pwm.h"
+#include "tim.h"
+
+void TB6612_Init(void);
+void TB6612_SetDirection(TB6612_Dir_t dir);
+void TB6612_SetDuty(uint32_t duty);
+void TB6612_Stop(void);
+void TB6612_Brake(void);
+void TB6612_SetRPM(float rpm);
+float TB6612_GetTargetRPM(void);
+
+
+static float tb6612_target_rpm = 0.0f;
+
+static float TB6612_AbsFloat(float value)
+{
+    if(value < 0.0f)
+    {
+        return -value;
+    }
+
+    return value;
+}
+
+void TB6612_Init(void)
+{
+    HAL_TIM_PWM_Start(&htim8, TIM_CHANNEL_1);
+    TB6612_Stop();
+}
+
+void TB6612_SetDirection(TB6612_Dir_t dir)
+{
+    switch(dir)
+    {
+        case TB6612_DIR_FORWARD:
+            HAL_GPIO_WritePin(MOTOR_OUT1_GPIO_Port, MOTOR_OUT1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(MOTOR_OUT2_GPIO_Port, MOTOR_OUT2_Pin, GPIO_PIN_RESET);
+            break;
+
+        case TB6612_DIR_REVERSE:
+            HAL_GPIO_WritePin(MOTOR_OUT1_GPIO_Port, MOTOR_OUT1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(MOTOR_OUT2_GPIO_Port, MOTOR_OUT2_Pin, GPIO_PIN_SET);
+            break;
+
+        case TB6612_DIR_BRAKE:
+            HAL_GPIO_WritePin(MOTOR_OUT1_GPIO_Port, MOTOR_OUT1_Pin, GPIO_PIN_SET);
+            HAL_GPIO_WritePin(MOTOR_OUT2_GPIO_Port, MOTOR_OUT2_Pin, GPIO_PIN_SET);
+            break;
+
+        case TB6612_DIR_STOP:
+        default:
+            HAL_GPIO_WritePin(MOTOR_OUT1_GPIO_Port, MOTOR_OUT1_Pin, GPIO_PIN_RESET);
+            HAL_GPIO_WritePin(MOTOR_OUT2_GPIO_Port, MOTOR_OUT2_Pin, GPIO_PIN_RESET);
+            break;
+    }
+}
+
+void TB6612_SetDuty(uint32_t duty)
+{
+    if(duty > TB6612_PWM_MAX_DUTY)
+    {
+        duty = TB6612_PWM_MAX_DUTY;
+    }
+
+    setPwmDuty(duty);
+}
+
+void TB6612_Stop(void)
+{
+    tb6612_target_rpm = 0.0f;
+    TB6612_SetDuty(0);
+    TB6612_SetDirection(TB6612_DIR_STOP);
+}
+
+void TB6612_Brake(void)
+{
+    tb6612_target_rpm = 0.0f;
+    TB6612_SetDuty(0);
+    TB6612_SetDirection(TB6612_DIR_BRAKE);
+}
+
+void TB6612_SetRPM(float rpm)
+{
+    float motor_rpm = rpm * TB6612_RPM_DIR;
+    float abs_rpm = TB6612_AbsFloat(motor_rpm);
+    uint32_t duty = 0;
+
+    tb6612_target_rpm = rpm;
+
+    if(abs_rpm <= 0.0f)
+    {
+        TB6612_Stop();
+        return;
+    }
+
+    if(abs_rpm > TB6612_MAX_RPM)
+    {
+        abs_rpm = TB6612_MAX_RPM;
+    }
+
+    duty = (uint32_t)((abs_rpm / TB6612_MAX_RPM) * (float)TB6612_PWM_MAX_DUTY);
+
+    if(motor_rpm > 0.0f)
+    {
+        TB6612_SetDirection(TB6612_DIR_FORWARD);
+    }
+    else
+    {
+        TB6612_SetDirection(TB6612_DIR_REVERSE);
+    }
+
+    TB6612_SetDuty(duty);
+}
+
+float TB6612_GetTargetRPM(void)
+{
+    return tb6612_target_rpm;
+}
+
+
+```
+
+#### 5.2.4 编写UART驱动
+
+为了简便，该驱动采用阻塞式传输，但在实际项目中我们往往不会使用这种方法，在此只做示例使用
+
+bsp_uart.h
+```c
+#pragma once
+
+#include "main.h"
+
+#define UART_RX_MAX_LEN 8u
+
+void UART_Init(void);
+void UART_SendByte(uint8_t data);
+void UART_SendData(uint8_t *data, uint16_t len);
+void UART_SendString(char *str);
+
+void UART_RxCallback(uint8_t *data, uint16_t len);
+
+```
+
+bsp_uart.c
+```c
+#include "bsp_uart.h"
+#include "usart.h"
+#include <string.h>
+
+static uint8_t uart_rx_data[UART_RX_MAX_LEN];
+
+void UART_Init(void)
+{
+    HAL_UARTEx_ReceiveToIdle_IT(&huart1, uart_rx_data, UART_RX_MAX_LEN);
+}
+
+void UART_SendByte(uint8_t data)
+{
+    HAL_UART_Transmit(&huart1, &data, 1, HAL_MAX_DELAY);
+}
+
+void UART_SendData(uint8_t *data, uint16_t len)
+{
+    HAL_UART_Transmit(&huart1, data, len, HAL_MAX_DELAY);
+}
+
+void UART_SendString(char *str)
+{
+    HAL_UART_Transmit(&huart1, (uint8_t *)str, strlen(str), HAL_MAX_DELAY);
+}
+
+__weak void UART_RxCallback(uint8_t *data, uint16_t len)
+{
+    (void)data;
+    (void)len;
+}
+
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+    if(huart->Instance == USART1)
+    {
+        UART_RxCallback(uart_rx_data, Size);
+        HAL_UARTEx_ReceiveToIdle_IT(&huart1, uart_rx_data, UART_RX_MAX_LEN);
+    }
+}
+
+```
+#### 
