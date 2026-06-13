@@ -345,11 +345,97 @@ MG370电机采用的是A/B相正交编码器
 ## 五、中断与定时器的结合应用
 
 在这个项目中，我们将实现
-- 用TIM生成一个100Hz中断
 - 用PWM驱动电机
 - 用Encoder Interface实现读取电机转速
-- 通过在100Hz的中断里更改PWM占空比，实现匀加速和匀减速
-- 通过UART通信将转速输出到电脑上
+- 通过UART通信将转速输出到电脑上，并实现UART控制PWM
+> UART通信我们还没有讲解，在此只是应用，我们将在后面的课程中学习，有兴趣的同学可以观看 [中科大RM电控教学](https://www.bilibili.com/video/BV1db4y1a7Xe/?share_source=copy_web&vd_source=de770ffc23fc2651b6ae5b4b0694e6a0)
 
 ### 5.1 配置CubeMX
 
+#### 5.1.1 配置PWM输出
+- 找到TIM8
+- 将CH1配置为PWM输出
+- 将CH1引脚修改到PC6
+- 根据手册判断主频
+- 按照PWM输出频率为1KHz计算并配置分频，在此我们把ARR设置为5000-1，这意味着我们的PWM的分辨率为5000
+
+![Proj3](./pictures/Proj3.png)
+![Proj4](./pictures/Proj4.png)
+
+#### 5.1.2 配置Encoder Interface
+- 找到TIM1
+- Combined Channels 选择 `Encoder Mode`
+- Encoder Mode 选择 `Encoder Mode T1 and T2`
+- 同理将CH1, CH2分别配置为 `PE9` `PE11`
+
+![Proj5](./pictures/Proj5.png)
+![Proj6](./pictures/Proj6.png)
+
+#### 5.1.3 配置UART
+- 找到USART1
+- 选择异步模式
+- 配置引脚
+- 打开中断
+
+![Proj7](./pictures/Proj7.png)
+
+![Proj8](./pictures/Proj8.png)
+
+![Proj9](./pictures/Proj9.png)
+
+### 5.2 编写程序
+#### 5.2.1 编写PWM驱动
+- 在 `User` 下新建 `bsp_pwm.c` `bsp_pwm.h`
+
+根据之前的原理，想要更改PWM占空比就是要更改当前通道的CCR值
+
+在 `stm32f4xx_hal_tim.h` 中，HAL库为我们提供了宏去直接修改CCR值
+
+```c
+/**
+  * @brief  Set the TIM Capture Compare Register value on runtime without calling another time ConfigChannel function.
+  * @param  __HANDLE__ TIM handle.
+  * @param  __CHANNEL__ TIM Channels to be configured.
+  *          This parameter can be one of the following values:
+  *            @arg TIM_CHANNEL_1: TIM Channel 1 selected
+  *            @arg TIM_CHANNEL_2: TIM Channel 2 selected
+  *            @arg TIM_CHANNEL_3: TIM Channel 3 selected
+  *            @arg TIM_CHANNEL_4: TIM Channel 4 selected
+  * @param  __COMPARE__ specifies the Capture Compare register new value.
+  * @retval None
+  */
+#define __HAL_TIM_SET_COMPARE(__HANDLE__, __CHANNEL__, __COMPARE__) \
+  (((__CHANNEL__) == TIM_CHANNEL_1) ? ((__HANDLE__)->Instance->CCR1 = (__COMPARE__)) :\
+   ((__CHANNEL__) == TIM_CHANNEL_2) ? ((__HANDLE__)->Instance->CCR2 = (__COMPARE__)) :\
+   ((__CHANNEL__) == TIM_CHANNEL_3) ? ((__HANDLE__)->Instance->CCR3 = (__COMPARE__)) :\
+   ((__HANDLE__)->Instance->CCR4 = (__COMPARE__)))
+```
+因此，我们只需要在 `bsp_pwm.c` 中封装一下就行
+
+bsp_pwm.h
+```c
+#pragma once
+#include "main.h"
+void setPwmDuty(uint32_t duty);
+```
+
+bsp_pwm.h
+```c
+#include "bsp_pwm.h"
+#include "tim.h"
+
+
+/**
+ *  @brief Set PWM duty
+ * 
+ *  @param duty must between 0-4999
+ */
+void setPwmDuty(uint32_t duty)
+{
+    if(duty >4999)
+        return;
+    __HAL_TIM_SET_COMPARE(&htim8, TIM_CHANNEL_1, duty);
+}
+```
+
+#### 5.2.2 编写Encoder驱动
