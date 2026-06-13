@@ -9,4 +9,5 @@
 #define ENCODER_DIRECTION           1
 
 void Encoder_Init(void);
+int32_t Encoder_GetCount(void);
 float Encoder_GetRPM(void);

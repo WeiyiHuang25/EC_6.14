@@ -15,3 +15,4 @@ typedef enum
 } TB6612_Dir_t;
 
 void TB6612_SetRPM(float rpm);
+void TB6612_Init(void);

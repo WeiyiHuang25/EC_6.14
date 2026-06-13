@@ -126,7 +126,7 @@
 
     .metrics {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 1px;
       overflow: hidden;
       margin-bottom: 12px;
@@ -147,6 +147,15 @@
     .metric strong {
       font-size: 24px;
       font-weight: 700;
+    }
+
+    .metric strong.hex {
+      display: block;
+      min-height: 34px;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 16px;
+      line-height: 1.35;
     }
 
     .chart-panel {
@@ -205,6 +214,7 @@
         Data
         <select id="mode">
           <option value="float32" selected>Float32 binary</option>
+          <option value="int32">Int32 binary</option>
           <option value="text">Text lines</option>
         </select>
       </label>
@@ -231,6 +241,10 @@
         <span>Samples</span>
         <strong id="samples">0</strong>
       </div>
+      <div class="metric">
+        <span>Last HEX</span>
+        <strong id="lastHex" class="hex">--</strong>
+      </div>
     </section>
 
     <section class="chart-panel" aria-label="RPM chart">
@@ -253,7 +267,8 @@
       min: Infinity,
       max: -Infinity,
       sampleCount: 0,
-      lastDraw: 0
+      lastDraw: 0,
+      lastHexBytes: []
     };
 
     const el = {
@@ -268,6 +283,7 @@
       min: document.getElementById("min"),
       max: document.getElementById("max"),
       samples: document.getElementById("samples"),
+      lastHex: document.getElementById("lastHex"),
       chart: document.getElementById("chart")
     };
 
@@ -291,11 +307,24 @@
       state.min = Infinity;
       state.max = -Infinity;
       state.sampleCount = 0;
+      state.lastHexBytes = [];
       el.latest.textContent = "--";
       el.min.textContent = "--";
       el.max.textContent = "--";
       el.samples.textContent = "0";
+      el.lastHex.textContent = "--";
       drawChart();
+    }
+
+    function updateLastHex(bytes) {
+      state.lastHexBytes.push(...bytes);
+      if (state.lastHexBytes.length > 32) {
+        state.lastHexBytes = state.lastHexBytes.slice(-32);
+      }
+
+      el.lastHex.textContent = state.lastHexBytes
+        .map((byte) => byte.toString(16).padStart(2, "0").toUpperCase())
+        .join(" ");
     }
 
     function addRpm(value) {
@@ -324,7 +353,9 @@
       }
     }
 
-    function parseFloat32Bytes(chunk) {
+    function parseBinaryBytes(chunk, readFrame) {
+      updateLastHex(chunk);
+
       for (const byte of chunk) {
         state.rxBytes.push(byte);
       }
@@ -332,11 +363,12 @@
       while (state.rxBytes.length >= 4) {
         const frame = state.rxBytes.splice(0, 4);
         const view = new DataView(new Uint8Array(frame).buffer);
-        addRpm(view.getFloat32(0, true));
+        addRpm(readFrame(view));
       }
     }
 
     function parseTextBytes(chunk) {
+      updateLastHex(chunk);
       state.textCache += new TextDecoder().decode(chunk, { stream: true });
       const lines = state.textCache.split(/\r?\n/);
       state.textCache = lines.pop() ?? "";
@@ -358,7 +390,9 @@
             }
             if (value) {
               if (el.mode.value === "float32") {
-                parseFloat32Bytes(value);
+                parseBinaryBytes(value, (view) => view.getFloat32(0, true));
+              } else if (el.mode.value === "int32") {
+                parseBinaryBytes(value, (view) => view.getInt32(0, true));
               } else {
                 parseTextBytes(value);
               }

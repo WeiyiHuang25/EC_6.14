@@ -814,3 +814,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 };
 
 ```
+
+### 5.3 接线
+![Encoder](./pictures/Encoder.png)

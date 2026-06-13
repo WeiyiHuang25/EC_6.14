@@ -3,9 +3,10 @@
 #include "bsp_pwm.h"
 #include "bsp_uart.h"
 #include "drv_tb6612.h"
+
 #include <string.h>
 
-uint32_t flag100hz = 0;
+volatile uint32_t flag100hz = 0;
 
 void app_task()
 {
@@ -33,6 +34,7 @@ void app_startMotor()
 void User_init()
 {
     Encoder_Init();
+    TB6612_Init();
 }
 
 
