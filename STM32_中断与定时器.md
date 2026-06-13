@@ -452,6 +452,7 @@ bsp_encoder.h
 #define ENCODER_PULSE_PER_MOTOR_REV 11u
 #define ENCODER_QUADRATURE_MULTIPLE 4u
 #define ENCODER_GEAR_RATIO          21.3f
+#define ENCODER_DIRECTION           1
 
 void Encoder_Init(void);
 float Encoder_GetRPM(void);
@@ -467,6 +468,14 @@ static int16_t encoder_last_count = 0;
 static uint32_t encoder_last_tick = 0;
 
 #define ENCODER_COUNTS_PER_MOTOR_REV  (ENCODER_PULSE_PER_MOTOR_REV * ENCODER_QUADRATURE_MULTIPLE)
+
+void Encoder_Init(void);
+void Encoder_Reset(void);
+int32_t Encoder_GetCount(void);
+void Encoder_Reset(void);
+float Encoder_GetMotorRPM(void);
+float Encoder_GetRPM(void);
+
 
 void Encoder_Init(void)
 {
@@ -502,12 +511,14 @@ float Encoder_GetMotorRPM(void)
     encoder_last_count = now_count;
     encoder_last_tick = now_tick;
 
-    return ((float)delta_count * 60000.0f) / ((float)ENCODER_COUNTS_PER_MOTOR_REV * (float)dt_ms);
+    return ((float)delta_count * (float)ENCODER_DIRECTION * 60000.0f) /
+           ((float)ENCODER_COUNTS_PER_MOTOR_REV * (float)dt_ms);
 }
 
 float Encoder_GetRPM(void)
 {
     return Encoder_GetMotorRPM() / ENCODER_GEAR_RATIO;
 }
+
 ```
 
