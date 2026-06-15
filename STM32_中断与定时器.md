@@ -365,6 +365,7 @@ MG370电机采用的是A/B相正交编码器
 - 启用中断
 
 ![Proj1](./pictures/Proj1.png)
+
 ![Proj2](./pictures/Proj2.png)
 
 
@@ -376,6 +377,7 @@ MG370电机采用的是A/B相正交编码器
 - 按照PWM输出频率为1KHz计算并配置分频，在此我们把ARR设置为5000-1，这意味着我们的PWM的分辨率为5000
 
 ![Proj3](./pictures/Proj3.png)
+
 ![Proj4](./pictures/Proj4.png)
 
 #### 5.1.2 配置Encoder Interface
@@ -385,6 +387,7 @@ MG370电机采用的是A/B相正交编码器
 - 同理将CH1, CH2分别配置为 `PE9` `PE11`
 
 ![Proj5](./pictures/Proj5.png)
+
 ![Proj6](./pictures/Proj6.png)
 
 #### 5.1.3 配置UART
